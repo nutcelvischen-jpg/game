@@ -147,6 +147,21 @@
             margin-bottom: 5px;
             border: 1px solid #999;
         }
+        
+        /* Boss 警告文字 */
+        #boss-warning {
+            position: absolute;
+            top: 20%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: red;
+            font-size: 2.5rem;
+            font-weight: bold;
+            text-shadow: 2px 2px 0px black;
+            opacity: 0;
+            transition: opacity 0.5s;
+            pointer-events: none;
+        }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
@@ -160,6 +175,8 @@
             <div class="stat-box">🌊 波數: <span id="wave-display">1</span></div>
             <div class="stat-box">👾 敵人: <span id="enemy-count-display">0</span></div>
         </div>
+
+        <div id="boss-warning">⚠️ 小魔王出現! ⚠️</div>
 
         <div id="bottom-bar">
             <div class="tower-btn selected" onclick="selectTowerType('basic')" id="btn-basic">
@@ -207,13 +224,15 @@
         towers: [],
         projectiles: [],
         particles: [],
-        path: [] 
+        path: [],
+        totalSpawnCount: 0 // 新增：累計產生的敵人數量
     };
 
+    // 調整後的武器數據
     const TOWER_TYPES = {
-        'basic': { price: 50, range: 35, damage: 20, color: 0x3498db, cooldown: 30, height: 8, maxHp: 100 },
-        'sniper': { price: 120, range: 70, damage: 100, color: 0xf1c40f, cooldown: 90, height: 12, maxHp: 80 },
-        'laser': { price: 200, range: 45, damage: 5, color: 0x9b59b6, cooldown: 5, height: 10, maxHp: 150 }
+        'basic': { price: 50, range: 35, damage: 40, color: 0x3498db, cooldown: 30, height: 8, maxHp: 100 },
+        'sniper': { price: 120, range: 80, damage: 250, color: 0xf1c40f, cooldown: 90, height: 12, maxHp: 80 },
+        'laser': { price: 200, range: 45, damage: 10, color: 0x9b59b6, cooldown: 5, height: 10, maxHp: 150 }
     };
 
     let scene, camera, renderer, raycaster, mouse;
@@ -244,7 +263,6 @@
         dirLight.castShadow = true;
         dirLight.shadow.mapSize.width = 2048;
         dirLight.shadow.mapSize.height = 2048;
-        // 擴大陰影範圍以涵蓋地形
         dirLight.shadow.camera.left = -100;
         dirLight.shadow.camera.right = 100;
         dirLight.shadow.camera.top = 100;
@@ -265,44 +283,34 @@
     // 0: 草地, 1: 路徑
     const mapLayout = [
         [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-        [1,1,1,1,0,0,1,1,1,1,1,1,1,0,0,0],
-        [0,0,0,1,0,0,1,0,0,0,0,0,1,0,0,0],
-        [0,0,0,1,1,1,1,0,0,0,0,0,1,0,0,0],
-        [0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0],
-        [0,0,1,1,1,1,1,1,1,0,0,0,1,0,0,0],
-        [0,0,1,0,0,0,0,0,1,0,0,0,1,1,1,1],
-        [0,0,1,0,0,0,0,0,1,0,0,0,0,0,0,0],
-        [0,0,1,1,1,1,1,1,1,0,0,0,0,0,0,0],
-        [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+        [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0], // 右 ->
+        [0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0], // 下
+        [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0], // 左 <-
+        [0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0], // 下
+        [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0], // 右 ->
+        [0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0], // 下
+        [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0], // 左 <-
+        [0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0], // 下
+        [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]  // 右 -> 終點
     ];
 
     function createMap() {
         // 1. 生成地形高度
-        // 簡單規則：
-        // 路徑基本上要平緩一些，但可以有小坡度
-        // 草地隨機起伏，周圍可以是山丘(高)或凹地(低)
-        
         terrainHeights = [];
         for(let r=0; r<GRID_HEIGHT; r++) {
             let row = [];
             for(let c=0; c<GRID_WIDTH; c++) {
                 let h = 0;
                 
-                // 簡單的高度噪聲模擬
                 const distFromCenter = Math.sqrt(Math.pow(r - GRID_HEIGHT/2, 2) + Math.pow(c - GRID_WIDTH/2, 2));
                 
                 if (mapLayout[r][c] === 1) {
-                    // 路徑：稍微有點坡度，例如中間隆起
-                    h = Math.sin(c * 0.5) * 4; // -4 到 4
+                    h = 0;
                 } else {
-                    // 草地：起伏較大
-                    // 隨機 + 邊緣山脈
-                    h = (Math.random() * 6 - 3) + (distFromCenter > 5 ? 5 : 0);
-                    // 偶爾有深坑
-                    if (Math.random() < 0.05) h -= 8;
+                    h = (Math.random() * 4) + 2; 
+                    if (Math.random() < 0.1) h += 5; 
                 }
                 
-                // 讓高度對齊到整數或半整數，比較好看
                 h = Math.round(h);
                 row.push(h);
             }
@@ -311,36 +319,40 @@
 
         // 2. 生成路徑節點 (3D座標)
         const pathIndices = [
-            {r:1, c:0}, {r:1, c:3}, {r:3, c:3}, {r:3, c:6}, {r:5, c:6}, {r:5, c:2}, {r:8, c:2}, {r:8, c:8}, {r:5, c:8}, {r:5, c:12}, {r:6, c:12}, {r:6, c:15}
+            {r:1, c:0},  
+            {r:1, c:14}, 
+            {r:3, c:14}, 
+            {r:3, c:1},  
+            {r:5, c:1},  
+            {r:5, c:14}, 
+            {r:7, c:14}, 
+            {r:7, c:1},  
+            {r:9, c:1},  
+            {r:9, c:15}  
         ];
         
         state.path = pathIndices.map(p => {
-            // 獲取該格的高度
             const h = terrainHeights[p.r][p.c];
             return new THREE.Vector3(
                 (p.c - GRID_WIDTH/2) * TILE_SIZE + TILE_SIZE/2,
-                h + 3, // +3 是敵人腳底高度 (因為地板中心是 h，表面是 h+10(boxHeight/2) ... 等等，我們重新定義地板生成方式)
+                h + 3,
                 (p.r - GRID_HEIGHT/2) * TILE_SIZE + TILE_SIZE/2
             );
         });
 
         // 3. 渲染地形方塊
         const grassMat = new THREE.MeshLambertMaterial({ color: 0x7cb342 }); 
-        const pathMat = new THREE.MeshLambertMaterial({ color: 0x8d6e63 }); 
-        const sideMat = new THREE.MeshLambertMaterial({ color: 0x5d4037 }); // 土壤顏色
+        const pathMat = new THREE.MeshLambertMaterial({ color: 0x757575 }); 
+        const sideMat = new THREE.MeshLambertMaterial({ color: 0x5d4037 }); 
 
         for(let r=0; r<GRID_HEIGHT; r++) {
             for(let c=0; c<GRID_WIDTH; c++) {
                 const type = mapLayout[r][c];
                 const h = terrainHeights[r][c];
                 
-                // 使用很高的長方體來模擬地形，避免底部穿幫
-                // 假設基準面 y=0，方塊高度 = 20 (base) + h*2 (scale?)
-                // 這裡簡單做：方塊高度固定，改變 y 位置
                 const boxHeight = 40; 
                 const geometry = new THREE.BoxGeometry(TILE_SIZE, boxHeight, TILE_SIZE);
                 
-                // 只有頂面是草/路，側面是土
                 const materials = [
                     sideMat, sideMat, // x+, x-
                     type === 1 ? pathMat : grassMat, // y+ (top)
@@ -350,9 +362,6 @@
 
                 const mesh = new THREE.Mesh(geometry, materials);
                 
-                // 計算位置
-                // 頂部表面應該在 y = h
-                // Mesh 中心 y = h - boxHeight/2
                 mesh.position.set(
                     (c - GRID_WIDTH/2) * TILE_SIZE + TILE_SIZE/2,
                     h - boxHeight/2,
@@ -365,7 +374,7 @@
                     type: type === 1 ? 'path' : 'grass',
                     gridX: c,
                     gridY: r,
-                    height: h, // 記錄表面高度
+                    height: h,
                     occupied: false
                 };
 
@@ -374,7 +383,6 @@
             }
         }
         
-        // 底部水平面 (深淵)
         const planeGeo = new THREE.PlaneGeometry(500, 500);
         const planeMat = new THREE.MeshBasicMaterial({ color: 0x222222 }); 
         const plane = new THREE.Mesh(planeGeo, planeMat);
@@ -383,62 +391,85 @@
         scene.add(plane);
     }
 
-    // --- 敵人系統 (含走路動畫) ---
+    // --- 敵人系統 (含走路動畫 & 裝甲) ---
     class Enemy {
-        constructor(speed, hp, color) {
-            // 建立一個 Group 來裝身體和腳
+        constructor(speed, hp, armor, color) {
             this.mesh = new THREE.Group();
+            this.armor = armor || 0;
+            this.maxHp = hp;
+            this.hp = hp;
             
+            // 根據裝甲值決定體型大小
+            const scale = 1 + (this.armor / 100); 
+            this.mesh.scale.setScalar(scale);
+
             // 1. 身體
             const bodyGeo = new THREE.BoxGeometry(2.5, 3, 2.5);
             const bodyMat = new THREE.MeshPhongMaterial({ color: color });
             this.body = new THREE.Mesh(bodyGeo, bodyMat);
-            this.body.position.y = 2.5; // 身體中心高度
+            this.body.position.y = 2.5; 
             this.body.castShadow = true;
             this.mesh.add(this.body);
 
+            // 1.5 裝甲外觀
+            if (this.armor > 0) {
+                const armorMat = new THREE.MeshPhongMaterial({ color: 0x333333 });
+                
+                // 頭盔
+                const helmetGeo = new THREE.BoxGeometry(2.7, 0.8, 2.7);
+                const helmet = new THREE.Mesh(helmetGeo, armorMat);
+                helmet.position.y = 4.1; 
+                this.mesh.add(helmet);
+
+                // 胸甲
+                if (this.armor >= 30) {
+                    const chestGeo = new THREE.BoxGeometry(2.8, 1.5, 2.8);
+                    const chest = new THREE.Mesh(chestGeo, armorMat);
+                    chest.position.y = 3.0;
+                    this.mesh.add(chest);
+                }
+            }
+
             // 2. 雙腳
             const legGeo = new THREE.CylinderGeometry(0.6, 0.6, 2.5);
-            const legMat = new THREE.MeshPhongMaterial({ color: 0x333333 });
+            const legMat = new THREE.MeshPhongMaterial({ color: 0x222222 });
             
             this.legL = new THREE.Mesh(legGeo, legMat);
-            this.legL.position.set(-0.8, 1.25, 0); // 相對於 Group 的位置
+            this.legL.position.set(-0.8, 1.25, 0); 
             this.mesh.add(this.legL);
 
             this.legR = new THREE.Mesh(legGeo, legMat);
             this.legR.position.set(0.8, 1.25, 0);
             this.mesh.add(this.legR);
             
-            // 眼睛 (裝飾)
+            // 眼睛
             const eyeGeo = new THREE.BoxGeometry(0.5, 0.5, 0.2);
             const eyeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            const eyeZ = 1.3 + (this.armor >= 30 ? 0.2 : 0); 
+            
             const eyeL = new THREE.Mesh(eyeGeo, eyeMat);
-            eyeL.position.set(-0.6, 0.5, 1.3);
+            eyeL.position.set(-0.6, 0.5, eyeZ);
             this.body.add(eyeL);
             const eyeR = new THREE.Mesh(eyeGeo, eyeMat);
-            eyeR.position.set(0.6, 0.5, 1.3);
+            eyeR.position.set(0.6, 0.5, eyeZ);
             this.body.add(eyeR);
 
 
             this.pathIndex = 0;
             this.progress = 0; 
             this.speed = speed;
-            this.hp = hp;
-            this.maxHp = hp;
             this.active = true;
             
-            // 動畫狀態
             this.walkCycle = 0;
 
             // 攻擊 AI
             this.state = 'MOVING';
             this.attackTarget = null;
             this.attackRange = 18; 
-            this.attackDamage = 2; 
+            this.attackDamage = 2 + Math.floor(this.armor / 10); 
             this.attackCooldown = 0;
             this.attackRate = 10; 
 
-            // 初始位置
             this.mesh.position.copy(state.path[0]);
             scene.add(this.mesh);
         }
@@ -448,16 +479,15 @@
 
             if(this.attackCooldown > 0) this.attackCooldown--;
 
-            // 走路動畫 (只要活著就擺動，攻擊時可以停或繼續)
+            // 走路動畫
             if (this.state === 'MOVING') {
-                this.walkCycle += delta * this.speed * 0.5;
-                // 腳的前後擺動 (繞 X 軸旋轉)
+                const animSpeed = this.speed * 0.5 * (1 / this.mesh.scale.x);
+                this.walkCycle += delta * animSpeed;
+                
                 this.legL.rotation.x = Math.sin(this.walkCycle) * 0.8;
                 this.legR.rotation.x = Math.sin(this.walkCycle + Math.PI) * 0.8;
-                // 身體稍微上下起伏
                 this.body.position.y = 2.5 + Math.abs(Math.sin(this.walkCycle * 2)) * 0.2;
             } else {
-                // 攻擊時恢復站姿
                 this.legL.rotation.x = THREE.MathUtils.lerp(this.legL.rotation.x, 0, 0.1);
                 this.legR.rotation.x = THREE.MathUtils.lerp(this.legR.rotation.x, 0, 0.1);
             }
@@ -465,8 +495,7 @@
             // AI 邏輯
             if (this.state === 'MOVING') {
                 for(let tower of state.towers) {
-                    // 檢查距離 (考慮高度差)
-                    if(tower.active && this.mesh.position.distanceTo(tower.mesh.position) < this.attackRange) {
+                    if(tower.active && this.mesh.position.distanceTo(tower.mesh.position) < this.attackRange * this.mesh.scale.x) { 
                         this.state = 'ATTACKING';
                         this.attackTarget = tower;
                         break;
@@ -477,14 +506,12 @@
                     this.state = 'MOVING';
                     this.attackTarget = null;
                 } else {
-                    // 面向目標
                     this.mesh.lookAt(this.attackTarget.mesh.position);
                     
                     if(this.attackCooldown <= 0) {
                         this.attackTarget.takeDamage(this.attackDamage);
                         this.attackCooldown = this.attackRate;
                         
-                        // 撞擊動畫 (身體前傾)
                         this.body.rotation.x = 0.5;
                         setTimeout(() => { if(this.active) this.body.rotation.x = 0; }, 100);
                     }
@@ -514,26 +541,31 @@
                 }
             }
 
-            // 計算新的位置
             const newPos = new THREE.Vector3().lerpVectors(
                 state.path[this.pathIndex], 
                 state.path[this.pathIndex+1], 
                 this.progress
             );
             
-            // 面向移動方向
-            this.mesh.lookAt(targetPos); // 簡單面向下一個節點
-            // 更平滑的面向：this.mesh.lookAt(newPos); 但 lookAt 自己會抖動，暫用 targetPos
-
+            this.mesh.lookAt(targetPos); 
             this.mesh.position.copy(newPos);
         }
 
         takeDamage(amount) {
-            this.hp -= amount;
-            this.body.material.emissive.setHex(0xff0000);
+            const reduction = 100 / (100 + this.armor);
+            const actualDamage = amount * reduction;
+
+            this.hp -= actualDamage;
+            
+            const flashColor = this.armor > 0 ? 0xaaaaaa : 0xff0000;
+            this.body.material.emissive.setHex(flashColor);
             setTimeout(() => {
                 if(this.active) this.body.material.emissive.setHex(0x000000);
             }, 50);
+
+            if(this.armor > 0 && Math.random() > 0.5) {
+                createSparks(this.mesh.position);
+            }
 
             if(this.hp <= 0) {
                 this.die();
@@ -543,7 +575,7 @@
         die() {
             this.active = false;
             scene.remove(this.mesh);
-            state.money += 20;
+            state.money += 20 + Math.floor(this.armor * 0.5);
             updateUI();
             createExplosion(this.mesh.position, this.body.material.color);
         }
@@ -599,9 +631,6 @@
         shoot(target) {
             const startPos = new THREE.Vector3();
             this.head.getWorldPosition(startPos);
-            // 修正子彈發射點高度，避免打到地面
-            // 已經用了 getWorldPosition，所以是準確的
-            
             const bullet = new Projectile(startPos, target, this.type.damage, this.type.color);
             state.projectiles.push(bullet);
         }
@@ -623,9 +652,7 @@
             scene.remove(this.mesh);
             createExplosion(this.mesh.position, 0x555555);
             
-            // 釋放地塊
             const pos = this.mesh.position;
-            // 由於高度不同，這裡只比對 X 和 Z
             gridMeshes.forEach(grid => {
                 if(Math.abs(grid.position.x - pos.x) < 1 && Math.abs(grid.position.z - pos.z) < 1) {
                     grid.userData.occupied = false;
@@ -658,7 +685,6 @@
                 return;
             }
 
-            // 瞄準敵人身體中心
             const targetPos = this.target.mesh.position.clone().add(new THREE.Vector3(0, 2, 0));
             this.mesh.lookAt(targetPos);
             
@@ -717,6 +743,15 @@
         }
     }
 
+    function createSparks(pos) {
+        for(let i=0; i<3; i++) {
+            const spark = new Particle(pos, 0xffff00); 
+            spark.mesh.scale.setScalar(0.5); 
+            spark.velocity.multiplyScalar(1.5); 
+            state.particles.push(spark);
+        }
+    }
+
     // --- 遊戲循環 ---
     let waveTimer = 0;
     let enemiesToSpawn = 0;
@@ -732,11 +767,32 @@
         if(enemiesToSpawn > 0) {
             spawnDelay -= delta;
             if(spawnDelay <= 0) {
-                const hp = 50 + (state.wave * 25);
-                const speed = 20 + (state.wave * 1.5); // 稍微調慢一點點，因為有地形
-                const color = new THREE.Color().setHSL((state.wave * 0.15) % 1, 0.8, 0.5);
+                // 增加已生成總數
+                state.totalSpawnCount++;
                 
-                state.enemies.push(new Enemy(speed, hp, color));
+                // 基礎數值
+                let hp = 50 + (state.wave * 25);
+                let armor = Math.max(0, (state.wave - 1) * 10);
+                let speed = 20 + (state.wave * 1.5);
+                let color = new THREE.Color().setHSL((state.wave * 0.15) % 1, 0.8, 0.5);
+
+                // 小魔王邏輯: 每 10 隻出現 1 隻
+                if (state.totalSpawnCount % 10 === 0) {
+                    hp *= 5; // 血量 5 倍
+                    armor += 80; // 裝甲 + 80 (這會導致體型 scale 增加 0.8，變得很大)
+                    speed *= 0.7; // 巨大化後走得慢
+                    color = 0xff0000; // 紅色
+                    
+                    // 顯示 Boss 警告
+                    const warning = document.getElementById('boss-warning');
+                    warning.style.opacity = 1;
+                    setTimeout(() => warning.style.opacity = 0, 2000);
+                } else {
+                    // 普通敵人速度受裝甲稍微影響
+                    speed = Math.max(10, speed - (armor * 0.1)); 
+                }
+
+                state.enemies.push(new Enemy(speed, hp, armor, color));
                 enemiesToSpawn--;
                 spawnDelay = 0.8; 
                 
@@ -819,7 +875,6 @@
 
     function buildTower(gridMesh) {
         const typeConfig = TOWER_TYPES[state.selectedTowerType];
-        // 從 gridMesh 讀取表面高度
         const terrainH = gridMesh.userData.height;
 
         if(state.money >= typeConfig.price) {
@@ -845,7 +900,6 @@
 
             baseMesh.add(headMesh);
 
-            // 放置在正確的高度
             baseMesh.position.set(gridMesh.position.x, terrainH + 1, gridMesh.position.z);
             scene.add(baseMesh);
 
